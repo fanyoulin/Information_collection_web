@@ -17,6 +17,39 @@
     const jsonObjects = collectJsonObjects(doc);
     const scriptText = scripts.join("\n");
     const candidates = buildCandidates(doc, url, host, scriptText, jsonObjects);
+    const pageState = detectPageState(doc, url, platform);
+    if (pageState.blocked) {
+      const blockedProductId = firstValue([
+        idFromUrl(url, platform),
+        regexFirst(scriptText, productIdPatterns())
+      ]);
+      const blockedGoodsId = firstValue([
+        queryParamValue(url, "goods_id"),
+        blockedProductId,
+        regexFirst(scriptText, goodsIdPatterns())
+      ]);
+      return pruneEmpty({
+        platform,
+        goods_id: blockedGoodsId,
+        Product_Information: {
+          product_id: blockedProductId,
+          goods_id: blockedGoodsId,
+          url,
+          page_url: url
+        },
+        captured_at: new Date().toISOString(),
+        page_url: url,
+        host,
+        confidence: blockedGoodsId ? 30 : 10,
+        warnings: [pageState.warning],
+        evidence: {
+          json_ld_count: jsonObjects.length,
+          script_count: scripts.length,
+          source: "manual_page_read",
+          page_state: pageState.type
+        }
+      });
+    }
     const pageSku = firstValue([
       extractPageSkuFromDom(doc, platform),
       regexFirst(scriptText, pageSkuPatterns())
@@ -182,6 +215,28 @@
     if (host.includes("temu.")) return "temu";
     if (host.includes("shein.")) return "shein";
     return "unknown";
+  }
+
+  function detectPageState(doc, url, platform) {
+    if (platform !== "temu") return { blocked: false };
+    const title = cleanupText(doc.title || "");
+    const text = cleanupText(doc.body?.innerText || "");
+    const hasProductSignals = /\bProduct detail\b/i.test(text) || /\bItem ID\b/i.test(text);
+    if (/\/login\.html/i.test(url) || /^Temu\s*\|\s*Login$/i.test(title) || (!hasProductSignals && /\bAll data will be encrypted\b.*\bSign in\b/i.test(text.slice(0, 1200)))) {
+      return {
+        blocked: true,
+        type: "temu_login",
+        warning: "当前页面是 Temu 登录页，未进入商品详情，无法采集完整商品信息。"
+      };
+    }
+    if (!hasProductSignals && (/verify|captcha|robot|challenge/i.test(url) || /All data (?:is|will be) safeguarded/i.test(text.slice(0, 1200)))) {
+      return {
+        blocked: true,
+        type: "temu_security",
+        warning: "当前页面是 Temu 安全/验证页面，未进入商品详情，无法采集完整商品信息。"
+      };
+    }
+    return { blocked: false };
   }
 
   function buildCandidates(doc, url, host, scriptText, jsonObjects) {
@@ -512,6 +567,7 @@
   }
 
   function idFromUrl(url, platform) {
+    const text = decodeUriSafe(url);
     const patterns = platform === "temu"
       ? [
         /[?&](?:goods_id|product_id)=([0-9A-Za-z_-]+)/i,
@@ -523,7 +579,7 @@
         /-p-([0-9A-Za-z_-]+)\.html/i,
         /\/p-([0-9A-Za-z_-]+)/i
       ];
-    return regexFirst(url, patterns);
+    return regexFirst(text, patterns);
   }
 
   function productIdPatterns() {
@@ -1220,6 +1276,7 @@
     if (!price) return null;
     let raw = cleanupText(price);
     let amount = normalizePriceAmount(raw);
+    if (!amount) return null;
     let priceCurrency = currency || inferCurrency(raw) || (platform === "temu" ? "USD" : null);
     if (platform === "temu" && amount && /^\d{3,}$/.test(amount) && !/[.$€£¥￥]/.test(raw)) {
       amount = (Number(amount) / 100).toFixed(2);
@@ -1230,6 +1287,14 @@
 
   function escapeRegex(text) {
     return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  function decodeUriSafe(text) {
+    try {
+      return decodeURIComponent(String(text || ""));
+    } catch (_) {
+      return String(text || "");
+    }
   }
 
   function pruneEmpty(value) {
