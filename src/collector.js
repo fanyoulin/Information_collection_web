@@ -55,12 +55,16 @@
       regexFirst(scriptText, pageSkuPatterns())
     ]);
     const selectedSpecs = normalizeSpecs(extractSelectedSpecsFromDom(doc, platform));
-    const variants = normalizeVariants(candidates.variants);
-    const currentVariant = findCurrentVariantByUrl(variants, url);
+    const baseVariants = normalizeVariants([
+      ...candidates.variants,
+      ...extractTemuVariantsFromScriptText(scriptText)
+    ]);
     const optionGroups = normalizeOptionGroups([
       ...extractOptionGroupsFromDom(doc, platform),
-      ...extractOptionGroupsFromVariants(variants)
+      ...extractOptionGroupsFromVariants(baseVariants)
     ]);
+    const variants = normalizeVariants(assignTemuOptionSpecs(platform, baseVariants, optionGroups));
+    const currentVariant = findCurrentVariantByUrl(platform, variants, url, selectedSpecs);
     const images = normalizeImages([
       ...candidates.images,
       ...extractImagesFromDom(doc, platform),
@@ -501,6 +505,7 @@
       "__INITIAL_STATE__",
       "__INITIAL_DATA__",
       "__NUXT__",
+      "window.rawData",
       "window.gbRawData",
       "window.productIntroData",
       "window.goodsDetail",
@@ -618,10 +623,10 @@
       return firstValue([urlSku, pageSku]);
     }
     return firstValue([
-      urlSku,
       currentVariant?.sku_id,
       pageSku,
       candidates.sku_id,
+      urlSku,
       regexFirst(scriptText, skuIdPatterns())
     ]);
   }
@@ -764,6 +769,15 @@
         if (specs.some((spec) => equalsLoose(spec.value, value))) continue;
         const group = el.closest("[role='radiogroup']");
         const name = cleanupText(inferSpecNameFromAncestor(el) || group?.getAttribute("aria-label") || "option");
+        specs.push({ name, value });
+      }
+    }
+    if (platform === "temu") {
+      for (const el of Array.from(doc.querySelectorAll("[role='radio'][aria-checked='true']")).slice(0, 40)) {
+        const value = cleanupText(el.getAttribute("aria-label") || visibleText(el));
+        if (!value || /select all|tick button|全选/i.test(value)) continue;
+        const group = el.closest("[role='radiogroup']");
+        const name = cleanupText(group?.getAttribute("aria-label") || "Specification");
         specs.push({ name, value });
       }
     }
@@ -1076,6 +1090,77 @@
     return variants;
   }
 
+  function extractTemuVariantsFromScriptText(scriptText) {
+    const variants = [];
+    const bySku = new Map();
+    const patterns = [
+      /"price_value"\s*:\s*"(\d{2,})"[^{}]{0,500}?"sku_id"\s*:\s*"?([0-9A-Za-z_-]{8,})"?[^{}]{0,500}?"curr"\s*:\s*"([A-Z]{3})"/gi,
+      /"sku_id"\s*:\s*"?([0-9A-Za-z_-]{8,})"?[^{}]{0,500}?"curr"\s*:\s*"([A-Z]{3})"[^{}]{0,500}?"price_value"\s*:\s*"(\d{2,})"/gi
+    ];
+
+    for (const pattern of patterns) {
+      let match;
+      while ((match = pattern.exec(scriptText || "")) && variants.length < 120) {
+        const priceValue = pattern === patterns[0] ? match[1] : match[3];
+        const skuId = pattern === patterns[0] ? match[2] : match[1];
+        const currency = pattern === patterns[0] ? match[3] : match[2];
+        if (!skuId || bySku.has(skuId)) continue;
+        bySku.set(skuId, true);
+        variants.push(pruneEmpty({
+          sku_id: skuId,
+          price: formatMinorUnitPrice(priceValue, currency),
+          currency
+        }));
+      }
+    }
+
+    return variants;
+  }
+
+  function formatMinorUnitPrice(value, currency) {
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return null;
+    const normalized = (amount / 100).toFixed(2);
+    if (currency === "USD") return `$${normalized}`;
+    return normalized;
+  }
+
+  function assignTemuOptionSpecs(platform, variants, optionGroups) {
+    if (platform !== "temu" || !variants?.length) return variants;
+    if (variants.some((variant) => variant.spec || variant.specs?.length)) return variants;
+    const group = (optionGroups || []).find((item) => item.options?.length === variants.length);
+    if (!group) return variants;
+
+    const options = group.options.filter((option) => option.value && !option.disabled);
+    if (options.length !== variants.length) return variants;
+
+    const numericOptions = options.map((option) => ({
+      option,
+      number: Number((cleanupText(option.value).match(/\d+(?:\.\d+)?/) || [])[0])
+    }));
+    const variantPrices = variants.map((variant) => ({
+      variant,
+      amount: Number(normalizePriceAmount(variant.price))
+    }));
+
+    const canSortByNumberAndPrice = numericOptions.every((item) => Number.isFinite(item.number))
+      && variantPrices.every((item) => Number.isFinite(item.amount));
+    const orderedOptions = canSortByNumberAndPrice
+      ? numericOptions.sort((left, right) => left.number - right.number).map((item) => item.option)
+      : options;
+    const orderedVariants = canSortByNumberAndPrice
+      ? variantPrices.sort((left, right) => left.amount - right.amount).map((item) => item.variant)
+      : variants;
+
+    return orderedVariants.map((variant, index) => pruneEmpty({
+      ...variant,
+      specs: [{
+        name: group.name,
+        value: orderedOptions[index]?.value
+      }]
+    }));
+  }
+
   function specFromObject(obj) {
     const name = pick(obj, [
       "attrName", "attributeName", "specName", "propertyName", "name", "key", "title", "label", "goodsAttrName"
@@ -1194,8 +1279,18 @@
     return url;
   }
 
-  function findCurrentVariantByUrl(variants, url) {
+  function findCurrentVariantByUrl(platform, variants, url, selectedSpecs = []) {
     const normalizedVariants = normalizeVariants(variants);
+    if (platform === "temu" && selectedSpecs?.length) {
+      const selectedValues = selectedSpecs.map((spec) => cleanupText(spec.value).toLowerCase()).filter(Boolean);
+      const selectedHit = normalizedVariants.find((variant) => {
+        const specs = variant.specs || (variant.spec ? [variant.spec] : []);
+        if (!specs.length) return false;
+        return specs.some((spec) => selectedValues.includes(cleanupText(spec.value).toLowerCase()));
+      });
+      if (selectedHit) return selectedHit;
+    }
+
     const urlSku = regexFirst(url, skuIdPatterns());
     if (urlSku) {
       const hit = normalizedVariants.find((variant) => equalsLoose(variant.sku_id, urlSku));
