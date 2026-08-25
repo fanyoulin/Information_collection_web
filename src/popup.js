@@ -27,6 +27,7 @@ const DEFAULT_API_CONFIG = {
   endpoint: "",
   method: "POST",
   timeoutMs: 15000,
+  reporter: "chrome-ext v1.0.0",
   headers: {
     "Content-Type": "application/json"
   }
@@ -106,7 +107,7 @@ async function sendResultToApi(result) {
     const response = await fetch(config.endpoint, {
       method: config.method || "POST",
       headers: config.headers,
-      body: formatJson(result),
+      body: JSON.stringify(buildApiPayload(result, config)),
       signal: controller.signal
     });
     const responseText = await response.text().catch(() => "");
@@ -139,6 +140,137 @@ function getApiConfig() {
       ...(custom.headers || {})
     }
   };
+}
+
+function buildApiPayload(result, config) {
+  const info = result.Product_Information || {};
+  const price = info.price || {};
+  return prunePayload({
+    platform: result.platform || "",
+    product_code: result.goods_id || info.goods_id || info.product_id || "",
+    reporter: config.reporter || DEFAULT_API_CONFIG.reporter,
+    product_info: {
+      product_id: info.product_id || result.goods_id || "",
+      title: info.full_title || info.title || "",
+      shop_id: info.shop_id || "",
+      shop_name: info.shop_name || "",
+      price: price.amount || normalizePriceForApi(price.raw),
+      currency: price.currency || "",
+      price_range: price.raw || "",
+      image: info.main_image_url || info.main_image || "",
+      skus: buildApiSkus(info)
+    }
+  });
+}
+
+function buildApiSkus(info) {
+  const variants = Array.isArray(info.variants) ? info.variants : [];
+  const skus = variants
+    .filter((variant) => variant && (variant.sku_id || variant.price || variant.stock || variant.availability || variant.spec || variant.specs?.length))
+    .map((variant) => prunePayload({
+      sku_id: variant.sku_id || "",
+      spec_text: buildSpecText(variant),
+      price: normalizePriceForApi(variant.price),
+      currency: variant.currency || info.price?.currency || "",
+      stock: normalizeStockForApi(variant.stock)
+    }));
+
+  if (!skus.length) {
+    skus.push(...buildOptionGroupSkus(info));
+  }
+
+  if (!skus.length && info.sku_id) {
+    skus.push(prunePayload({
+      sku_id: info.sku_id,
+      spec_text: (info.selected_specs || []).map((item) => item.value).filter(Boolean).join(" / "),
+      price: info.price?.amount || normalizePriceForApi(info.price?.raw),
+      currency: info.price?.currency || ""
+    }));
+  }
+  return skus;
+}
+
+function buildOptionGroupSkus(info) {
+  const groups = (Array.isArray(info.option_groups) ? info.option_groups : [])
+    .map((group) => ({
+      name: group.name || "option",
+      options: (Array.isArray(group.options) ? group.options : [])
+        .filter((option) => option && option.value && !option.disabled)
+    }))
+    .filter((group) => group.options.length);
+
+  if (!groups.length) return [];
+
+  const combinations = cartesianOptionGroups(groups).slice(0, 120);
+  const selectedText = (info.selected_specs || [])
+    .map((item) => item.value)
+    .filter(Boolean)
+    .join(" / ");
+  const currentSkuAssigned = { value: false };
+
+  return combinations.map((combo, index) => {
+    const specText = combo.map((item) => item.value).filter(Boolean).join(" / ");
+    const comboHasSelected = combo.some((item) => item.selected);
+    const matchesSelected = selectedText && selectedText === specText;
+    const shouldUseCurrentSku = info.sku_id && !currentSkuAssigned.value && (matchesSelected || comboHasSelected || (!selectedText && index === 0));
+    if (shouldUseCurrentSku) currentSkuAssigned.value = true;
+    return prunePayload({
+      sku_id: shouldUseCurrentSku ? info.sku_id : "",
+      spec_text: specText,
+      price: info.price?.amount || normalizePriceForApi(info.price?.raw),
+      currency: info.price?.currency || ""
+    });
+  });
+}
+
+function cartesianOptionGroups(groups) {
+  return groups.reduce((rows, group) => {
+    const next = [];
+    for (const row of rows) {
+      for (const option of group.options) {
+        next.push([...row, option]);
+      }
+    }
+    return next;
+  }, [[]]);
+}
+
+function buildSpecText(variant) {
+  const specs = Array.isArray(variant.specs) ? variant.specs : [];
+  if (specs.length) return specs.map((item) => item.value).filter(Boolean).join(" / ");
+  if (variant.spec?.value) return variant.spec.value;
+  return "";
+}
+
+function normalizePriceForApi(value) {
+  const text = String(value || "");
+  const match = text.match(/[0-9][0-9.,]*/);
+  return match ? match[0].replace(/,/g, "") : "";
+}
+
+function normalizeStockForApi(value) {
+  if (value === null || value === undefined || value === "") return undefined;
+  const text = String(value);
+  if (/^(true|soldout|outofstock)$/i.test(text)) return 0;
+  if (/^(false|instock)$/i.test(text)) return undefined;
+  const match = text.match(/\d+/);
+  return match ? Number(match[0]) : undefined;
+}
+
+function prunePayload(value) {
+  if (Array.isArray(value)) {
+    return value.map(prunePayload).filter((item) => item !== null && item !== undefined);
+  }
+  if (!value || typeof value !== "object") return value;
+  const output = {};
+  for (const [key, child] of Object.entries(value)) {
+    const pruned = prunePayload(child);
+    if (pruned === null || pruned === undefined || pruned === "") continue;
+    if (Array.isArray(pruned) && pruned.length === 0) continue;
+    if (typeof pruned === "object" && !Array.isArray(pruned) && Object.keys(pruned).length === 0) continue;
+    output[key] = pruned;
+  }
+  return output;
 }
 
 async function copyJson() {

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "商品信息采集助手",
   "description": "手动采集当前 SHEIN、Temu 等商品页的标题、商品 ID、SKU、规格、店铺和价格信息。",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "permissions": [
     "activeTab",
     "scripting",
