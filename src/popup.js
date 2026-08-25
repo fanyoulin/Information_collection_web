@@ -166,6 +166,7 @@ function orderProductResult(result) {
     ordered.Product_Information = orderObject(info, [
       "product_id",
       "goods_id",
+      "item_id",
       "title",
       "full_title",
       "sku_id",
@@ -274,6 +275,7 @@ function toCsv(result) {
     full_title: info.full_title || "",
     product_id: info.product_id || "",
     goods_id: result.goods_id || info.goods_id || "",
+    item_id: info.item_id || "",
     sku_id: info.sku_id || "",
     page_sku: info.page_sku || "",
     shop_name: info.shop_name || "",

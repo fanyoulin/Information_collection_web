@@ -1,6 +1,6 @@
 # 商品信息采集助手
 
-这是一个 Chrome/Edge Manifest V3 插件 MVP。用户打开 SHEIN、Temu 等商品详情页后，点击插件弹窗里的“采集”，插件会读取当前页面的 DOM、meta 和页面脚本里的 JSON 片段，整理出商品标题、商品 ID、`sku_id`、规格、店铺、价格等字段。
+这是一个 Chrome/Edge Manifest V3 插件 MVP。用户打开 SHEIN、Temu 等商品详情页后，点击插件弹窗里的“采集”，插件会读取当前页面的 DOM、meta 和页面脚本里的 JSON 片段，整理出商品标题、商品 ID、Temu `Item ID`、`sku_id`、规格、店铺、价格等字段。
 
 ## 安装
 

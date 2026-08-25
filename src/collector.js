@@ -112,6 +112,12 @@
       ]);
 
     const skuId = resolveSkuId(platform, url, pageSku, currentVariant, candidates, scriptText);
+    const itemId = firstValue([
+      extractItemIdFromDom(doc, platform),
+      queryParamValue(url, "item_id"),
+      candidates.item_id,
+      regexFirst(scriptText, itemIdPatterns())
+    ]);
 
     const shopName = firstValue([
       extractShopNameFromDom(doc, platform),
@@ -127,10 +133,11 @@
       regexFirst(url, shopIdPatterns()),
       regexFirst(scriptText, shopIdPatterns())
     ]);
-    const priceInfo = price ? { raw: price, amount: normalizePriceAmount(price), currency } : null;
+    const priceInfo = buildPriceInfo(price, currency, platform);
     const productInformation = pruneEmpty({
       product_id: productId,
       goods_id: goodsId,
+      item_id: itemId,
       title,
       full_title: fullTitle,
       sku_id: skuId,
@@ -159,8 +166,8 @@
       captured_at: new Date().toISOString(),
       page_url: url,
       host,
-      confidence: scoreConfidence({ title, fullTitle, productId, goodsId, skuId, shopName, shopId, price, mainImage, specs, productAttributes, optionGroups, variants }),
-      warnings: buildWarnings({ platform, title, fullTitle, productId, goodsId, skuId, pageSku, currentVariant, price, mainImage, specs, productAttributes, optionGroups, variants, shopId }),
+      confidence: scoreConfidence({ title, fullTitle, productId, goodsId, itemId, skuId, shopName, shopId, price, mainImage, specs, productAttributes, optionGroups, variants }),
+      warnings: buildWarnings({ platform, title, fullTitle, productId, goodsId, itemId, skuId, pageSku, currentVariant, price, mainImage, specs, productAttributes, optionGroups, variants, shopId }),
       evidence: {
         json_ld_count: jsonObjects.length,
         script_count: scripts.length,
@@ -180,6 +187,7 @@
   function buildCandidates(doc, url, host, scriptText, jsonObjects) {
     const found = {
       product_id: null,
+      item_id: null,
       full_title: null,
       sku_id: null,
       shop_name: null,
@@ -200,6 +208,10 @@
     found.product_id = firstValue([
       found.product_id,
       regexFirst(scriptText, productIdPatterns())
+    ]);
+    found.item_id = firstValue([
+      found.item_id,
+      regexFirst(scriptText, itemIdPatterns())
     ]);
     found.sku_id = firstValue([
       found.sku_id,
@@ -256,7 +268,8 @@
       }
 
       found.full_title = firstValue([found.full_title, pick(product, ["name", "headline", "title"])]);
-      found.product_id = firstValue([found.product_id, pick(product, ["productID", "productId", "itemId", "goodsId"])]);
+      found.product_id = firstValue([found.product_id, pick(product, ["productID", "productId", "goodsId"])]);
+      found.item_id = firstValue([found.item_id, pick(product, ["itemId", "item_id"])]);
       if (!hasProductGroup) {
         found.sku_id = firstValue([found.sku_id, pick(product, ["sku", "skuId", "sku_id"])]);
       }
@@ -330,7 +343,10 @@
       "goods_name", "goodsName", "product_name", "productName", "title", "name"
     ])]);
     found.product_id = firstValue([found.product_id, pick(obj, [
-      "goods_id", "goodsId", "product_id", "productId", "productID", "item_id", "itemId", "goodsSn", "goods_sn"
+      "goods_id", "goodsId", "product_id", "productId", "productID", "goodsSn", "goods_sn"
+    ])]);
+    found.item_id = firstValue([found.item_id, pick(obj, [
+      "item_id", "itemId", "itemID"
     ])]);
     found.sku_id = firstValue([found.sku_id, pick(obj, [
       "sku_id", "skuId", "skc", "skuCode", "sku_code", "sku", "mallSkuId"
@@ -352,10 +368,16 @@
       obj.images,
       obj.goods_img,
       obj.goodsImg,
+      obj.goodsImage,
+      obj.goodsImageUrl,
       obj.main_img,
       obj.mainImg,
+      obj.mainImage,
+      obj.mainImageUrl,
       obj.original_img,
       obj.originalImg,
+      obj.thumbUrl,
+      obj.hdThumbUrl,
       obj.thumbnail,
       obj.thumbnailUrl
     ]));
@@ -492,12 +514,12 @@
   function idFromUrl(url, platform) {
     const patterns = platform === "temu"
       ? [
-        /[?&](?:goods_id|product_id|item_id)=([0-9A-Za-z_-]+)/i,
+        /[?&](?:goods_id|product_id)=([0-9A-Za-z_-]+)/i,
         /-g-([0-9A-Za-z_-]+)\.html/i,
         /\/g-([0-9A-Za-z_-]+)/i
       ]
       : [
-        /[?&](?:goods_id|product_id|item_id)=([0-9A-Za-z_-]+)/i,
+        /[?&](?:goods_id|product_id)=([0-9A-Za-z_-]+)/i,
         /-p-([0-9A-Za-z_-]+)\.html/i,
         /\/p-([0-9A-Za-z_-]+)/i
       ];
@@ -506,8 +528,17 @@
 
   function productIdPatterns() {
     return [
-      /"(?:goods_id|goodsId|product_id|productId|productID|item_id|itemId)"\s*:\s*"?([0-9A-Za-z_-]{5,})"?/i,
-      /(?:goods_id|product_id|item_id)=([0-9A-Za-z_-]{5,})/i
+      /"(?:goods_id|goodsId|product_id|productId|productID)"\s*:\s*"?([0-9A-Za-z_-]{5,})"?/i,
+      /(?:goods_id|product_id)=([0-9A-Za-z_-]{5,})/i
+    ];
+  }
+
+  function itemIdPatterns() {
+    return [
+      /Item\s*ID\s*[:：]?\s*([0-9A-Za-z_-]{3,})/i,
+      /商品(?:编号|ID|Id|id)\s*[:：]?\s*([0-9A-Za-z_-]{3,})/i,
+      /"(?:item_id|itemId|itemID)"\s*:\s*"?([0-9A-Za-z_-]{3,})"?/i,
+      /(?:item_id|itemId)=([0-9A-Za-z_-]{3,})/i
     ];
   }
 
@@ -700,6 +731,20 @@
         if (options.length) groups.push({ name, options });
       }
     }
+    if (platform === "temu") {
+      const options = Array.from(doc.querySelectorAll("[role='radio']")).map((el) => {
+        const value = cleanupText(el.getAttribute("aria-label") || visibleText(el));
+        if (!value || /select all|tick button|全选/i.test(value)) return null;
+        return pruneEmpty({
+          value,
+          selected: el.getAttribute("aria-checked") === "true" || /selected|active|checked/i.test(el.className || ""),
+          disabled: el.getAttribute("aria-disabled") === "true" || /soldout|disabled/i.test(el.className || "")
+        });
+      }).filter(Boolean);
+      if (options.length) {
+        groups.push({ name: "Specification", options });
+      }
+    }
     return groups;
   }
 
@@ -786,6 +831,14 @@
         ".product-intro__main img",
         ".goods-detail img"
       ]
+      : platform === "temu"
+        ? [
+          "img[aria-label='Goods Image']",
+          "img[alt*='item picture' i]",
+          "img[alt][src*='img.kwcdn.com']",
+          "img[src*='img.kwcdn.com']",
+          "img[data-src*='img.kwcdn.com']"
+        ]
       : [
         "[class*='product' i] img",
         "[class*='gallery' i] img",
@@ -798,6 +851,8 @@
           img.currentSrc,
           img.src,
           img.getAttribute("data-src"),
+          img.getAttribute("data-original-src"),
+          img.getAttribute("data-lazy"),
           img.getAttribute("data-original"),
           img.getAttribute("data-lazy-src")
         );
@@ -867,8 +922,45 @@
         }
       }
     }
+    if (platform === "temu") {
+      const text = cleanupText(doc.body?.innerText || "");
+      const itemId = regexFirst(text, itemIdPatterns());
+      if (itemId) attrs.push({ name: "Item ID", value: itemId });
+
+      const detailText = extractBetween(text, /Product\s+detail\s*/i, /\s+(?:Store\s+Information|Save|Report\s+issue|See\s+all\s+detail)\b/i);
+      if (detailText) {
+        for (const pair of extractAdjacentPairs(detailText)) {
+          attrs.push(pair);
+        }
+      }
+    }
 
     return attrs;
+  }
+
+  function extractItemIdFromDom(doc, platform) {
+    if (platform !== "temu") return null;
+    const text = cleanupText(doc.body?.innerText || "");
+    return regexFirst(text, itemIdPatterns());
+  }
+
+  function extractAdjacentPairs(text) {
+    const parts = cleanupText(text).split(/\s+/).filter(Boolean);
+    const attrs = [];
+    const knownNames = [
+      "Shelf Life",
+      "Allergen Information",
+      "Item ID"
+    ];
+    for (const name of knownNames) {
+      const pattern = new RegExp(`${escapeRegex(name)}\\s+(.+?)(?=\\s+(?:${knownNames.map(escapeRegex).join("|")})\\s+|$)`, "i");
+      const match = cleanupText(text).match(pattern);
+      if (match && match[1]) {
+        const value = cleanupText(match[1].replace(/\s+Copy$/i, ""));
+        if (value && value.length <= 240) attrs.push({ name, value });
+      }
+    }
+    return attrs.length ? attrs : parts.length ? [] : [];
   }
 
   function extractBetween(text, startPattern, endPattern) {
@@ -1122,6 +1214,22 @@
   function normalizePriceAmount(price) {
     const match = String(price || "").match(/[0-9][0-9.,]*/);
     return match ? match[0] : null;
+  }
+
+  function buildPriceInfo(price, currency, platform) {
+    if (!price) return null;
+    let raw = cleanupText(price);
+    let amount = normalizePriceAmount(raw);
+    let priceCurrency = currency || inferCurrency(raw) || (platform === "temu" ? "USD" : null);
+    if (platform === "temu" && amount && /^\d{3,}$/.test(amount) && !/[.$€£¥￥]/.test(raw)) {
+      amount = (Number(amount) / 100).toFixed(2);
+      raw = priceCurrency === "USD" || !priceCurrency ? `$${amount}` : amount;
+    }
+    return pruneEmpty({ raw, amount, currency: priceCurrency });
+  }
+
+  function escapeRegex(text) {
+    return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
   function pruneEmpty(value) {
