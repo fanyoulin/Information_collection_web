@@ -1,0 +1,164 @@
+:root {
+  color-scheme: light;
+  font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
+  color: #17202a;
+  background: #f6f7f9;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  width: 430px;
+  min-height: 560px;
+  margin: 0;
+  background: #f6f7f9;
+}
+
+.app {
+  padding: 14px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 2px 12px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.25;
+  font-weight: 700;
+}
+
+p {
+  margin: 4px 0 0;
+  color: #607080;
+  font-size: 12px;
+}
+
+.confidence {
+  display: inline-grid;
+  min-width: 50px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid #d7dde4;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #304152;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.toolbar {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  border: 1px solid #cfd7e0;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1f2d3a;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: #8fa2b4;
+  background: #f9fbfc;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button.primary {
+  border-color: #176b87;
+  background: #176b87;
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.summary {
+  border: 1px solid #dce2e8;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin: 0;
+}
+
+dl div {
+  min-width: 0;
+  padding: 10px;
+  border-right: 1px solid #edf0f3;
+  border-bottom: 1px solid #edf0f3;
+}
+
+dl div:nth-child(2n) {
+  border-right: 0;
+}
+
+dl div:nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+dt {
+  color: #718191;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+dd {
+  min-height: 20px;
+  margin: 4px 0 0;
+  overflow: hidden;
+  color: #1d2b36;
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.details {
+  margin-top: 12px;
+}
+
+label {
+  display: block;
+  margin-bottom: 6px;
+  color: #526373;
+  font-size: 12px;
+}
+
+textarea {
+  width: 100%;
+  height: 310px;
+  resize: none;
+  border: 1px solid #d7dde4;
+  border-radius: 8px;
+  padding: 10px;
+  background: #ffffff;
+  color: #17202a;
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+}

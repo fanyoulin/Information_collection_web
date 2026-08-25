@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>商品信息采集</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <div>
+          <h1>商品采集</h1>
+          <p id="status">打开商品页后点击采集</p>
+        </div>
+        <span id="confidence" class="confidence">--</span>
+      </header>
+
+      <section class="toolbar">
+        <button id="collectBtn" class="primary" type="button" title="采集当前标签页商品信息">
+          <span aria-hidden="true">+</span>
+          <span>采集</span>
+        </button>
+        <button id="copyBtn" type="button" title="复制 JSON">
+          <span aria-hidden="true">{}</span>
+          <span>复制</span>
+        </button>
+        <button id="jsonBtn" type="button" title="下载 JSON">
+          <span aria-hidden="true">↓</span>
+          <span>JSON</span>
+        </button>
+        <button id="csvBtn" type="button" title="下载 CSV">
+          <span aria-hidden="true">↓</span>
+          <span>CSV</span>
+        </button>
+      </section>
+
+      <section class="summary" aria-label="采集摘要">
+        <dl>
+          <div>
+            <dt>平台</dt>
+            <dd id="platform">--</dd>
+          </div>
+          <div>
+            <dt>商品 ID</dt>
+            <dd id="productId">--</dd>
+          </div>
+          <div>
+            <dt>SKU</dt>
+            <dd id="skuId">--</dd>
+          </div>
+          <div>
+            <dt>价格</dt>
+            <dd id="price">--</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="details">
+        <label for="output">采集结果</label>
+        <textarea id="output" spellcheck="false" readonly></textarea>
+      </section>
+    </main>
+
+    <script src="config.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
