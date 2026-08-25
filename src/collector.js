@@ -1175,11 +1175,12 @@
   function assignTemuOptionSpecs(platform, variants, optionGroups) {
     if (platform !== "temu" || !variants?.length) return variants;
     if (variants.some((variant) => variant.alt_text)) {
-      return variants.map((variant) => {
+      const inferred = variants.map((variant) => {
         if (!variant.alt_text || variant.spec || variant.specs?.length) return variant;
         const specs = inferSpecsFromTemuAltText(variant.alt_text, optionGroups);
         return specs.length ? pruneEmpty({ ...variant, specs }) : variant;
       });
+      return completeTemuGridSpecs(inferred, optionGroups);
     }
     if (variants.some((variant) => variant.spec || variant.specs?.length)) return variants;
     const group = (optionGroups || []).find((item) => item.options?.length === variants.length);
@@ -1228,14 +1229,50 @@
           name: group.name,
           value: hit.value
         });
-      } else if (/^color$/i.test(group.name) && options[0]?.value) {
-        specs.push({
-          name: group.name,
-          value: options[0].value
-        });
       }
     }
     return specs;
+  }
+
+  function completeTemuGridSpecs(variants, optionGroups) {
+    const colorGroup = (optionGroups || []).find((group) => /^color$/i.test(group.name));
+    const sizeGroup = (optionGroups || []).find((group) => /^size/i.test(group.name));
+    const colors = (colorGroup?.options || []).map((option) => option.value).filter(Boolean);
+    const sizes = (sizeGroup?.options || []).map((option) => option.value).filter(Boolean);
+    if (!colors.length || !sizes.length || colors.length * sizes.length !== variants.length) return variants;
+
+    const sorted = variants.slice().sort((left, right) => Number(left.sku_id) - Number(right.sku_id));
+    let checked = 0;
+    let mismatches = 0;
+    for (let index = 0; index < sorted.length; index += 1) {
+      const expectedColor = colors[Math.floor(index / sizes.length)];
+      const expectedSize = sizes[index % sizes.length];
+      const specs = sorted[index].specs || [];
+      const actualColor = specs.find((spec) => /^color$/i.test(spec.name))?.value;
+      const actualSize = specs.find((spec) => /^size/i.test(spec.name))?.value;
+      if (actualColor) {
+        checked += 1;
+        if (!equalsLoose(actualColor, expectedColor)) mismatches += 1;
+      }
+      if (actualSize) {
+        checked += 1;
+        if (!equalsLoose(actualSize, expectedSize)) mismatches += 1;
+      }
+    }
+    if (checked && mismatches / checked > 0.1) return variants;
+
+    const completedBySku = new Map();
+    sorted.forEach((variant, index) => {
+      const expectedSpecs = [
+        { name: colorGroup.name, value: colors[Math.floor(index / sizes.length)] },
+        { name: sizeGroup.name, value: sizes[index % sizes.length] }
+      ];
+      completedBySku.set(variant.sku_id, pruneEmpty({
+        ...variant,
+        specs: normalizeSpecs([...(variant.specs || []), ...expectedSpecs])
+      }));
+    });
+    return variants.map((variant) => completedBySku.get(variant.sku_id) || variant);
   }
 
   function temuAltContainsSpecValue(normalizedAltText, value) {
