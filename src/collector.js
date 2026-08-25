@@ -94,6 +94,7 @@
     ]);
 
     const price = firstValue([
+      platform === "temu" ? currentVariant?.price : null,
       extractPriceFromDom(doc),
       metaContent(doc, "meta[property='product:price:amount']"),
       metaContent(doc, "meta[itemprop='price']"),
@@ -262,6 +263,7 @@
     for (const obj of jsonObjects) {
       walkObject(obj, found);
       collectJsonLdProduct(obj, found);
+      collectTemuSkuAltVariants(obj, found);
     }
 
     found.product_id = firstValue([
@@ -338,6 +340,37 @@
       found.main_image = firstValue([found.main_image, found.images[0]]);
       const seller = product.seller || product.brand || {};
       found.shop_name = firstValue([found.shop_name, pick(seller, ["name", "storeName", "shopName"])]);
+    }
+  }
+
+  function collectTemuSkuAltVariants(root, found) {
+    const stack = [{ value: root, depth: 0 }];
+    const seen = new Set();
+    while (stack.length) {
+      const current = stack.pop();
+      const value = current.value;
+      if (!value || typeof value !== "object" || current.depth > 10 || seen.has(value)) continue;
+      seen.add(value);
+
+      if (value.skuIdAlts && typeof value.skuIdAlts === "object") {
+        for (const [skuId, altText] of Object.entries(value.skuIdAlts)) {
+          if (!/^[0-9A-Za-z_-]{8,}$/.test(skuId)) continue;
+          found.variants.push(pruneEmpty({
+            sku_id: skuId,
+            alt_text: normalizeScalar(altText)
+          }));
+        }
+      }
+
+      if (Array.isArray(value)) {
+        for (const item of value) stack.push({ value: item, depth: current.depth + 1 });
+      } else {
+        for (const child of Object.values(value)) {
+          if (child && typeof child === "object") {
+            stack.push({ value: child, depth: current.depth + 1 });
+          }
+        }
+      }
     }
   }
 
@@ -777,7 +810,7 @@
         const value = cleanupText(el.getAttribute("aria-label") || visibleText(el));
         if (!value || /select all|tick button|全选/i.test(value)) continue;
         const group = el.closest("[role='radiogroup']");
-        const name = cleanupText(group?.getAttribute("aria-label") || "Specification");
+        const name = cleanupText(inferTemuSpecNameFromAncestor(el) || group?.getAttribute("aria-label") || "Specification");
         specs.push({ name, value });
       }
     }
@@ -802,17 +835,20 @@
       }
     }
     if (platform === "temu") {
-      const options = Array.from(doc.querySelectorAll("[role='radio']")).map((el) => {
+      const byName = new Map();
+      for (const el of Array.from(doc.querySelectorAll("[role='radio']")).slice(0, 160)) {
         const value = cleanupText(el.getAttribute("aria-label") || visibleText(el));
-        if (!value || /select all|tick button|全选/i.test(value)) return null;
-        return pruneEmpty({
+        if (!value || /select all|tick button|全选/i.test(value)) continue;
+        const name = inferTemuSpecNameFromAncestor(el) || "Specification";
+        if (!byName.has(name)) byName.set(name, []);
+        byName.get(name).push(pruneEmpty({
           value,
           selected: el.getAttribute("aria-checked") === "true" || /selected|active|checked/i.test(el.className || ""),
           disabled: el.getAttribute("aria-disabled") === "true" || /soldout|disabled/i.test(el.className || "")
-        });
-      }).filter(Boolean);
-      if (options.length) {
-        groups.push({ name: "Specification", options });
+        }));
+      }
+      for (const [name, options] of byName.entries()) {
+        if (options.length) groups.push({ name, options });
       }
     }
     return groups;
@@ -880,6 +916,16 @@
     const container = group.closest(".main-sales-attr__fold, .product-intro__bsSize, .size-item");
     const title = container?.querySelector(".color-block, .title, .size-item__title, h2");
     return cleanSpecName(title?.innerText || title?.textContent || "");
+  }
+
+  function inferTemuSpecNameFromAncestor(el) {
+    let node = el;
+    for (let depth = 0; node && depth < 6; depth += 1, node = node.parentElement) {
+      const text = visibleText(node);
+      const match = text && text.match(/^(Color|Size(?:\([^)]+\))?|Style|Quantity|Specification)\s*[:：]/i);
+      if (match && match[1]) return cleanupText(match[1]);
+    }
+    return null;
   }
 
   function cleanSpecName(text) {
@@ -1094,6 +1140,7 @@
     const variants = [];
     const bySku = new Map();
     const patterns = [
+      /"sku_id"\s*:\s*"?([0-9A-Za-z_-]{8,})"?[^{}]{0,500}?"activity_price"\s*:\s*"(\d{2,})"[^{}]{0,500}?"curr"\s*:\s*"([A-Z]{3})"/gi,
       /"price_value"\s*:\s*"(\d{2,})"[^{}]{0,500}?"sku_id"\s*:\s*"?([0-9A-Za-z_-]{8,})"?[^{}]{0,500}?"curr"\s*:\s*"([A-Z]{3})"/gi,
       /"sku_id"\s*:\s*"?([0-9A-Za-z_-]{8,})"?[^{}]{0,500}?"curr"\s*:\s*"([A-Z]{3})"[^{}]{0,500}?"price_value"\s*:\s*"(\d{2,})"/gi
     ];
@@ -1101,9 +1148,9 @@
     for (const pattern of patterns) {
       let match;
       while ((match = pattern.exec(scriptText || "")) && variants.length < 120) {
-        const priceValue = pattern === patterns[0] ? match[1] : match[3];
-        const skuId = pattern === patterns[0] ? match[2] : match[1];
-        const currency = pattern === patterns[0] ? match[3] : match[2];
+        const priceValue = pattern === patterns[0] ? match[2] : pattern === patterns[1] ? match[1] : match[3];
+        const skuId = pattern === patterns[0] || pattern === patterns[2] ? match[1] : match[2];
+        const currency = pattern === patterns[0] || pattern === patterns[1] ? match[3] : match[2];
         if (!skuId || bySku.has(skuId)) continue;
         bySku.set(skuId, true);
         variants.push(pruneEmpty({
@@ -1127,6 +1174,13 @@
 
   function assignTemuOptionSpecs(platform, variants, optionGroups) {
     if (platform !== "temu" || !variants?.length) return variants;
+    if (variants.some((variant) => variant.alt_text)) {
+      return variants.map((variant) => {
+        if (!variant.alt_text || variant.spec || variant.specs?.length) return variant;
+        const specs = inferSpecsFromTemuAltText(variant.alt_text, optionGroups);
+        return specs.length ? pruneEmpty({ ...variant, specs }) : variant;
+      });
+    }
     if (variants.some((variant) => variant.spec || variant.specs?.length)) return variants;
     const group = (optionGroups || []).find((item) => item.options?.length === variants.length);
     if (!group) return variants;
@@ -1159,6 +1213,39 @@
         value: orderedOptions[index]?.value
       }]
     }));
+  }
+
+  function inferSpecsFromTemuAltText(altText, optionGroups) {
+    const text = ` ${cleanupText(altText).toLowerCase()} `;
+    const specs = [];
+    for (const group of optionGroups || []) {
+      const options = (group.options || [])
+        .filter((option) => option.value)
+        .sort((left, right) => String(right.value).length - String(left.value).length);
+      const hit = options.find((option) => temuAltContainsSpecValue(text, option.value));
+      if (hit) {
+        specs.push({
+          name: group.name,
+          value: hit.value
+        });
+      } else if (/^color$/i.test(group.name) && options[0]?.value) {
+        specs.push({
+          name: group.name,
+          value: options[0].value
+        });
+      }
+    }
+    return specs;
+  }
+
+  function temuAltContainsSpecValue(normalizedAltText, value) {
+    const normalizedValue = cleanupText(value).toLowerCase();
+    if (!normalizedValue) return false;
+    const escaped = escapeRegex(normalizedValue);
+    if (/^[a-z0-9]+$/i.test(normalizedValue)) {
+      return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, "i").test(normalizedAltText);
+    }
+    return normalizedAltText.includes(normalizedValue);
   }
 
   function specFromObject(obj) {
@@ -1220,12 +1307,10 @@
     for (const variant of variants) {
       if (!variant || typeof variant !== "object") continue;
       const normalized = pruneEmpty(variant);
-      if (!normalized.sku_id && !normalized.price && !normalized.spec && !(normalized.specs && normalized.specs.length)) continue;
+      if (!normalized.sku_id && !normalized.price && !normalized.alt_text && !normalized.spec && !(normalized.specs && normalized.specs.length)) continue;
       if (normalized.sku_id && bySku.has(normalized.sku_id)) {
         const index = bySku.get(normalized.sku_id);
-        if (variantQuality(normalized) > variantQuality(output[index])) {
-          output[index] = normalized;
-        }
+        output[index] = mergeVariants(output[index], normalized);
         continue;
       }
       const key = JSON.stringify(normalized).slice(0, 300);
@@ -1238,12 +1323,31 @@
     return output;
   }
 
+  function mergeVariants(left, right) {
+    const leftSpecs = left.specs || (left.spec ? [left.spec] : []);
+    const rightSpecs = right.specs || (right.spec ? [right.spec] : []);
+    const mergedSpecs = normalizeSpecs([...leftSpecs, ...rightSpecs]);
+    return pruneEmpty({
+      ...left,
+      ...right,
+      sku_id: right.sku_id || left.sku_id,
+      price: right.price || left.price,
+      currency: right.currency || left.currency,
+      stock: right.stock || left.stock,
+      availability: right.availability || left.availability,
+      url: right.url || left.url,
+      alt_text: right.alt_text || left.alt_text,
+      specs: mergedSpecs
+    });
+  }
+
   function variantQuality(variant) {
     let score = 0;
     if (variant.sku_id) score += 2;
     if (variant.price) score += 1;
     if (variant.currency) score += 1;
     if (variant.availability) score += 1;
+    if (variant.alt_text) score += 1;
     if (variant.spec) score += 2;
     if (variant.specs?.length) score += 3 + variant.specs.length;
     return score;
